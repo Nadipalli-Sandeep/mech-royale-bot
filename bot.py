@@ -32,8 +32,8 @@ def d3(a, b):
 HIDE = os.environ.get("MF_HIDE") == "1"
 
 WEAPON_PREF = {"laser": 3, "lightning": 2, "mortar": -1, "gun": 0}
-UPGRADE_ORDER = ["armor", "plating", "laser_charge", "laser_damage", "lightning_efficiency", "gun_rate", "gun_damage",
-                 "nanites", "reactor", "capacitor", "lightning_chain", "lightning_range", "gun_mag",
+UPGRADE_ORDER = ["armor", "plating", "nanites", "laser_charge", "laser_damage", "lightning_efficiency", "gun_rate",
+                 "gun_damage", "reactor", "capacitor", "lightning_chain", "lightning_range", "gun_mag",
                  "servos", "sensors", "gyros", "jets", "gun_velocity", "laser_pierce", "mortar_reload",
                  "mortar_velocity", "mortar_splash"]
 
@@ -424,8 +424,8 @@ class Bot:
         if target and (target[2] or target[1] < 200):
             m = target[0]
             shoot_target = (m["pos"], m.get("vel", [0, 0, 0]), 9 * (1 + 0.05 * m.get("cubes", 0)), "mech", target[2], target[1])
-        elif not visible_enemies:
-            # NPCs and crates when calm
+        elif not visible_enemies and (hp_frac > 0.9 or any(k >= 100 and t - v < 3 for k, v in self.attackers.items())):
+            # NPCs and crates when calm -- but not while hurt: dealing damage blocks health regen
             cand = None
             bestd = 1e9
             for n in npcs:
@@ -450,14 +450,23 @@ class Bot:
             L = 0.12 + self.lat  # decision latency: the torso gets there about one decision later
             mz = [muzzle[0] + mv_[0] * L, muzzle[1] + mv_[1] * L, muzzle[2]]
 
+            g_ = self.mech_cfg.get("gravity", 22)
+            floor_ = self.world.surface(tp[0], tp[1])
+            if floor_ is None:
+                floor_ = self.world.ground(tp[0], tp[1])
+            airborne = abs(tv[2]) > 0.3 or tp[2] - floor_ > 1.0
+
             def lead(src, extra):
                 p = center
                 for _ in range(3):
                     tt = d3(p, src) / self.gun_speed + extra
-                    p = [center[0] + tv[0] * tt, center[1] + tv[1] * tt, center[2] + tv[2] * tt]
-                gz = self.world.ground(p[0], p[1])
-                if p[2] < gz + th * 0.3:
-                    p[2] = gz + th * 0.3
+                    pz = center[2] + tv[2] * tt
+                    if airborne:
+                        pz -= 0.5 * g_ * tt * tt
+                    p = [center[0] + tv[0] * tt, center[1] + tv[1] * tt, pz]
+                gz = max(self.world.ground(p[0], p[1]), floor_ if airborne else -1e9)
+                if p[2] < gz + th * 0.5:
+                    p[2] = gz + th * 0.5
                 return p
 
             def yp(src, p):
