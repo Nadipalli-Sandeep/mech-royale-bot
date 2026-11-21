@@ -28,10 +28,10 @@ def d3(a, b):
 
 
 WEAPON_PREF = {"lightning": 3, "laser": 2, "mortar": -1, "gun": 0}
-UPGRADE_ORDER = ["armor", "plating", "nanites", "gun_rate", "lightning_efficiency", "gun_damage", "laser_charge",
-                 "laser_damage", "servos", "sensors", "reactor", "capacitor", "gyros", "gun_mag", "lightning_range",
-                 "jets", "gun_velocity", "lightning_chain", "laser_pierce", "mortar_reload", "mortar_velocity",
-                 "mortar_splash"]
+UPGRADE_ORDER = ["armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "reactor", "nanites",
+                 "capacitor", "lightning_chain", "lightning_range", "laser_charge", "laser_damage", "gun_mag",
+                 "servos", "sensors", "gyros", "jets", "gun_velocity", "laser_pierce", "mortar_reload",
+                 "mortar_velocity", "mortar_splash"]
 
 
 class Planner:
@@ -367,14 +367,14 @@ class Bot:
             bestd = 1e9
             for n in npcs:
                 dist = d3(n["pos"], pos)
-                if dist < 140 and dist < bestd and self.in_circle(n["pos"], cur_c, cur_r, 5):
+                if dist < (190 if t < 160 else 140) and dist < bestd and self.in_circle(n["pos"], cur_c, cur_r, 5):
                     tc = [n["pos"][0], n["pos"][1], n["pos"][2] + 1.75]
                     if self.world.los(muzzle, tc, skip_end=1.0):
                         bestd, cand = dist, (n["pos"], n.get("vel", [0, 0, 0]), 3.5, "npc", True, dist)
             if cand is None:
                 for c in obs["crates"]:
                     dist = d3(c["pos"], pos)
-                    if dist < 90 and dist < bestd:
+                    if dist < (130 if t < 160 else 90) and dist < bestd:
                         tc = [c["pos"][0], c["pos"][1], c["pos"][2] + 1.2]
                         if self.world.los(muzzle, tc, skip_end=1.0):
                             bestd, cand = dist, (c["pos"], [0, 0, 0], 2.4, "crate", True, dist)
@@ -541,7 +541,7 @@ class Bot:
             cp = self.find_cover(pos, threats, (cur_c, cur_r), t)
             if cp is not None:
                 goal = cp
-                boost = me["energy"] > 30
+                boost = me["energy"] > (60 if "lightning" in has else 30)
                 self.mode = "cover"
             else:
                 goal = None
@@ -601,7 +601,7 @@ class Bot:
                     if not self.world.walk_line(pos, ahead):
                         mx, my = bx * radial if radial else bx, by * radial if radial else by
                 move = (mx, my)
-                boost = me["energy"] > (75 if "lightning" in has else 40) and (recently_hit or laser_threat is not None)
+                boost = laser_threat is not None and me["energy"] > (70 if "lightning" in has else 35)
         else:
             # calm: loot, cubes, drops, then hold a safe spot
             if best_pick and best_pick[2] < 140:
@@ -660,7 +660,7 @@ class Bot:
             ax, ay_ = pos[0] - danger[0], pos[1] - danger[1]
             an = math.hypot(ax, ay_) or 1
             move = (ax / an, ay_ / an)
-            boost = me["energy"] > 10
+            boost = me["energy"] > (35 if "lightning" in has else 10)
         elif laser_threat is not None:
             m, byaw = laser_threat
             if t > self.dodge_until:
@@ -668,7 +668,7 @@ class Bot:
                 self.dodge_until = t + 0.6
             px, py = -math.sin(byaw) * self.dodge_vec, math.cos(byaw) * self.dodge_vec
             move = (px * 0.9 + move[0] * 0.3, py * 0.9 + move[1] * 0.3)
-            boost = me["energy"] > 15
+            boost = me["energy"] > (60 if "lightning" in has else 20)
 
         # stuck handling
         self.last_pos_hist.append((t, pos[0], pos[1]))
