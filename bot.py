@@ -32,8 +32,9 @@ def d3(a, b):
 HIDE = os.environ.get("MF_HIDE") == "1"
 DUCK = False  # ducking while reloading tested worse (3.71); kept off
 
+CUBE_CAP = 10  # past 10 cubes only size grows (easier to hit): stop collecting
 WEAPON_PREF = {"laser": 3, "lightning": 2, "mortar": -1, "gun": 0}
-UPGRADE_ORDER = ["armor", "plating", "gun_damage", "gun_rate", "nanites", "laser_charge", "laser_damage",
+UPGRADE_ORDER = ["armor", "nanites", "plating", "gun_damage", "gun_rate", "laser_charge", "laser_damage",
                  "lightning_efficiency", "reactor", "capacitor", "lightning_chain", "lightning_range", "gun_mag",
                  "servos", "sensors", "gyros", "jets", "gun_velocity", "laser_pierce", "mortar_reload",
                  "mortar_velocity", "mortar_splash"]
@@ -444,7 +445,7 @@ class Bot:
         if target and (target[2] or target[1] < 200):
             m = target[0]
             shoot_target = (m["pos"], m.get("vel", [0, 0, 0]), 9 * (1 + 0.05 * m.get("cubes", 0)), "mech", target[2], target[1])
-        elif not visible_enemies and (hp_frac > 0.9 or any(k >= 100 and t - v < 3 for k, v in self.attackers.items())):
+        elif not visible_enemies and me["cubes"] < CUBE_CAP and (hp_frac > 0.9 or any(k >= 100 and t - v < 3 for k, v in self.attackers.items())):
             # NPCs and crates when calm -- but not while hurt: dealing damage blocks health regen
             cand = None
             bestd = 1e9
@@ -736,7 +737,7 @@ class Bot:
                 for dr in obs.get("drops", []):
                     dd = d2(dr["pos"], pos)
                     holder = dr.get("holder")
-                    if dd < 320 and not hot and (holder is None or holder == me["id"])                             and self.in_circle(dr["pos"], safe_c, safe_r, 0) and dr["lands_in"] < dd / 11.0 + 6:
+                    if dd < 320 and not hot and (holder is None or holder == me["id"]) and (me["cubes"] < CUBE_CAP or hp_frac < 0.7)                             and self.in_circle(dr["pos"], safe_c, safe_r, 0) and dr["lands_in"] < dd / 11.0 + 6:
                         drop_goal = dr["pos"]
                         break
             if drop_goal is not None:
@@ -747,7 +748,7 @@ class Bot:
                 cb = None
                 for c in obs["cubes"]:
                     dist = d2(c["pos"], pos)
-                    if dist < 120 and self.in_circle(c["pos"], cur_c, cur_r, 5) and (cb is None or dist < cb[0]):
+                    if me["cubes"] < CUBE_CAP and dist < 120 and self.in_circle(c["pos"], cur_c, cur_r, 5) and (cb is None or dist < cb[0]):
                         cb = (dist, c)
                 if cb:
                     goal = cb[1]["pos"]
@@ -755,11 +756,11 @@ class Bot:
                     # supply drop
                     for dr in obs.get("drops", []):
                         dd = d2(dr["pos"], pos)
-                        if dd < 200 and hp_frac > 0.4 and not threat_near and self.in_circle(dr["pos"], safe_c, safe_r, 0):
+                        if dd < 200 and hp_frac > 0.4 and not threat_near and self.in_circle(dr["pos"], safe_c, safe_r, 0) and (me["cubes"] < CUBE_CAP or hp_frac < 0.7):
                             if dr["lands_in"] < dd / 11.0 + 3:
                                 goal = dr["pos"]
                                 break
-                    if goal is None and t < 210 and hp_frac > 0.45 and not HIDE:
+                    if goal is None and t < 210 and hp_frac > 0.45 and not HIDE and me["cubes"] < CUBE_CAP:
                         goal = self.farm_goal(pos, muzzle, safe_c, safe_r, t)
                     if goal is None and shoot_target and shoot_target[3] in ("crate", "npc") and not HIDE:
                         tp = shoot_target[0]
@@ -789,7 +790,7 @@ class Bot:
                 cb = None
                 for c in obs["cubes"]:
                     dc = d2(c["pos"], pos)
-                    if dc < 25 and abs(c["pos"][2] - pos[2]) < 6 and (cb is None or dc < cb[0]):
+                    if me["cubes"] < CUBE_CAP and dc < 25 and abs(c["pos"][2] - pos[2]) < 6 and (cb is None or dc < cb[0]):
                         cb = (dc, c["pos"])
                 if cb:
                     goal = cb[1]
@@ -839,6 +840,19 @@ class Bot:
             if self.rng.random() < 0.5 and self.stuck_dir is not None:
                 move = (move[0] * 0.5 + math.cos(self.stuck_dir) * 0.5, move[1] * 0.5 + math.sin(self.stuck_dir) * 0.5)
 
+        if me["cubes"] >= CUBE_CAP and math.hypot(*move) > 0.1:
+            rx = ry = 0.0
+            for c in obs["cubes"]:
+                dx, dy = pos[0] - c["pos"][0], pos[1] - c["pos"][1]
+                dd = math.hypot(dx, dy)
+                if dd < 7 and abs(c["pos"][2] - pos[2]) < 6:
+                    w = (7 - dd) / 7 * 1.5
+                    rx += dx / (dd or 1) * w
+                    ry += dy / (dd or 1) * w
+            if rx or ry:
+                mx, my = move[0] + rx, move[1] + ry
+                mn = max(1.0, math.hypot(mx, my))
+                move = (mx / mn, my / mn)
         if walk_slow:
             move = (move[0] * 0.38, move[1] * 0.38)
 
