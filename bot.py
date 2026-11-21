@@ -206,7 +206,7 @@ class Bot:
             return False
         m = target[0]
         ehp = m.get("hp", 1400) / max(1.0, m.get("max_hp", 1400))
-        if hp_frac < 0.3 and ehp > hp_frac + 0.2:
+        if hp_frac < 0.4 and ehp > hp_frac + 0.2:
             return True
         return False
 
@@ -570,9 +570,13 @@ class Bot:
                 radial = 1.0
             elif dist < pref_d - 10:
                 radial = -1.0
+            group = sum(1 for _m, _d, _l in visible_enemies if _d < 160)
             if not los:
                 ehp = m.get("hp", 1400) / max(1.0, m.get("max_hp", 1400))
-                if hp_frac > 0.5 or ehp < hp_frac - 0.1:
+                if group >= 2:
+                    # several hunters: wait at our corner, make them come around it one by one
+                    goal = None
+                elif hp_frac > 0.5 or ehp < hp_frac - 0.1:
                     # go find a line: move toward the target via path
                     goal = m["pos"]
                 else:
@@ -584,6 +588,14 @@ class Bot:
                 self.strafe_sign = self.rng.choice((-1, 1))
                 self.strafe_until = t + self.rng.uniform(0.5, 1.4)
             if radial is not None:
+                if group >= 2:
+                    # outnumbered in the open: back away from the group while fighting the nearest
+                    others = [_m["pos"] for _m, _d, _l in visible_enemies if _d < 160]
+                    gx = sum(p_[0] for p_ in others) / len(others) - pos[0]
+                    gy = sum(p_[1] for p_ in others) / len(others) - pos[1]
+                    gn = math.hypot(gx, gy) or 1
+                    bx, by = gx / gn, gy / gn
+                    radial = -1.0
                 sx, sy = -by * self.strafe_sign, bx * self.strafe_sign
                 mx, my = sx * 0.85 + bx * radial * 0.7, sy * 0.85 + by * radial * 0.7
                 # keep inside zone
@@ -643,6 +655,17 @@ class Bot:
         if goal is not None and not engaged and me["in_zone"]:
             if not self.in_circle(goal, safe_c, safe_r, 3) and self.in_circle(pos, safe_c, safe_r, 3):
                 goal = None
+        # power cubes close by are worth a short detour (kills drop the victim's cubes + 2)
+        if self.mode != "cover" and me["in_zone"]:
+            hot = any(los and dist < 60 for _m, dist, los in visible_enemies)
+            if not hot:
+                cb = None
+                for c in obs["cubes"]:
+                    dc = d2(c["pos"], pos)
+                    if dc < 25 and abs(c["pos"][2] - pos[2]) < 6 and (cb is None or dc < cb[0]):
+                        cb = (dc, c["pos"])
+                if cb:
+                    goal = cb[1]
         if goal is not None:
             move = self.nav_to(goal, t, pos)
         elif move == (0.0, 0.0) and not self.in_circle(pos, safe_c, safe_r, 4):
