@@ -135,7 +135,7 @@ class Bot:
         self.blocked_pickups = {}
         self.jump_cd = 0
         self.prev_hp = None
-        self.cover_cache = None
+        self.cover_caches = {}
         self.npc_mem = {}
         self.crate_mem = {}
         self.explore_pt = None
@@ -172,16 +172,17 @@ class Bot:
     def in_circle(self, p, c, r, margin=0.0):
         return d2(p, c) <= r - margin
 
-    def find_cover(self, pos, threats, circ, t):
+    def find_cover(self, pos, threats, circ, t, radii=(10.0, 18.0, 28.0, 40.0), key="cover"):
         """A nearby walkable point hidden from the given threat positions. Cached for 0.5 s."""
-        if self.cover_cache and t - self.cover_cache[0] < 0.5:
-            return self.cover_cache[1]
+        cc = self.cover_caches.get(key)
+        if cc and t - cc[0] < 0.5:
+            return cc[1]
         w = self.world
         best = None
         base = self.rng.uniform(0, TAU)
         threats = sorted(threats, key=lambda p: d2(p, pos))[:3]
         deadline = time.perf_counter() + 0.006
-        for r in (10.0, 18.0, 28.0, 40.0):
+        for r in radii:
             if time.perf_counter() > deadline:
                 break
             for k in range(10):
@@ -205,7 +206,7 @@ class Bot:
             if best and best[2] == 0 and best[0] < r + 1:
                 break
         res = best[1] if best and best[2] < len(threats) else None
-        self.cover_cache = (t, res)
+        self.cover_caches[key] = (t, res)
         return res
 
     def farm_goal(self, pos, muzzle, sc, sr, t):
@@ -244,6 +245,24 @@ class Bot:
                     self.explore_until = t + 30
                     break
         return self.explore_pt
+
+    def _want_duck(self, target, weapons, has, me):
+        if HIDE or target is None or not target[2] or target[1] > 170:
+            return False
+        w0 = weapons[0]
+        if not w0 or w0["kind"] != "gun":
+            return False
+        gun_busy = (w0.get("reload", 0) or 0) > 0.4 or w0.get("ammo", 1) == 0
+        if not gun_busy:
+            return False
+        for w in weapons[1:]:
+            if not w:
+                continue
+            if w["kind"] == "laser" and ((w.get("charge") or 0) > 0 or (w.get("cooldown", 0) or 0) < 0.5):
+                return False
+            if w["kind"] == "lightning" and target[1] < 45 and me["energy"] > 12:
+                return False
+        return True
 
     def _want_cover(self, visible_enemies, hp_frac, target, t):
         if HIDE:
@@ -610,6 +629,11 @@ class Bot:
             goal = cur_c
             boost = me["energy"] > 10
             self.mode = "zone"
+        elif engaged and self._want_duck(target, weapons, has, me) and                 self.find_cover(pos, [target[0]["pos"]], (cur_c, cur_r), t, radii=(8.0, 14.0, 20.0), key="duck") is not None:
+            # weapons not ready: step out of its sight, come back loaded
+            goal = self.find_cover(pos, [target[0]["pos"]], (cur_c, cur_r), t, radii=(8.0, 14.0, 20.0), key="duck")
+            boost = me["energy"] > (60 if "lightning" in has else 35)
+            self.mode = "duck"
         elif engaged and self._want_cover(visible_enemies, hp_frac, target, t):
             threats = [m["pos"] for m, dist, los in visible_enemies if dist < 160]
             cp = self.find_cover(pos, threats, (cur_c, cur_r), t)
@@ -619,7 +643,7 @@ class Bot:
                 self.mode = "cover"
             else:
                 goal = None
-        if goal is not None and self.mode == "cover":
+        if goal is not None and self.mode in ("cover", "duck"):
             pass
         elif not me["in_zone"]:
             pass
