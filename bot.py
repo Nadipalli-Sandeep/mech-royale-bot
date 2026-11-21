@@ -760,7 +760,7 @@ class Bot:
                                 goal = dr["pos"]
                                 break
                     if goal is None and t < 210 and hp_frac > 0.45 and not HIDE:
-                        goal = self.farm_goal(pos, muzzle, safe_c, safe_r, t)
+                        goal = None  # variant: no active farming/exploring
                     if goal is None and shoot_target and shoot_target[3] in ("crate", "npc") and not HIDE:
                         tp = shoot_target[0]
                         if shoot_target[5] > 40:
