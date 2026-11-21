@@ -656,9 +656,9 @@ class Bot:
             if "lightning" in has:
                 pref_d = 28 if hp_frac > 0.35 else 60
             elif "laser" in has:
-                pref_d = 85
+                pref_d = 70
             else:
-                pref_d = 75
+                pref_d = 60
             if "lightning" in tw and "lightning" not in has:
                 pref_d = max(pref_d, 60)
             rush = False
