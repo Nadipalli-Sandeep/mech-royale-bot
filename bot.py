@@ -1,4 +1,5 @@
 """Mech Royale bot: survive, loot, and win 1-on-1 fights with good aim, cover and dodging."""
+import gc
 import math
 import os
 import random
@@ -97,6 +98,8 @@ class Bot:
         self.world = World(hello["map"]["dir"])
         mf.log(f"world loaded in {time.time() - t0:.2f}s")
         self.planner = Planner(self.world)
+        gc.collect()
+        gc.freeze()
         self.t_start = 0.0
         W = self.cfg["weapons"]
         self.gun_speed = W["gun"]["speed"]
@@ -130,6 +133,10 @@ class Bot:
         self.jump_cd = 0
         self.prev_hp = None
         self.cover_cache = None
+        self.npc_mem = {}
+        self.crate_mem = {}
+        self.explore_pt = None
+        self.explore_until = -1
         # Test-only: extra action delay of the remote play server (unset in scored matches = lockstep).
         self.lat = float(os.environ.get("MF_LAT", "0") or 0)
         self.prev_cmd = None
@@ -197,6 +204,43 @@ class Bot:
         res = best[1] if best and best[2] < len(threats) else None
         self.cover_cache = (t, res)
         return res
+
+    def farm_goal(self, pos, muzzle, sc, sr, t):
+        """Go after remembered drones/crates (cubes = HP, damage, upgrades); explore if none known."""
+        w = self.world
+        best = None
+        for mem, kind in ((self.npc_mem, "npc"), (self.crate_mem, "crate")):
+            for k, (p, hp, ts) in mem.items():
+                if not self.in_circle(p, sc, sr, 10):
+                    continue
+                if kind == "crate" and p[2] - w.ground(p[0], p[1]) > 3.0:
+                    continue  # roof crate: its cube would land up there
+                dd = d2(p, pos)
+                if dd > 320:
+                    continue
+                score = dd - (45 if kind == "npc" else 0)
+                if best is None or score < best[0]:
+                    best = (score, p, kind, dd)
+        if best:
+            _, p, kind, dd = best
+            standoff = 45 if kind == "npc" else 16
+            if dd < standoff and w.los(muzzle, (p[0], p[1], p[2] + 1.5), step=2.0):
+                return None  # in place: the shooting code takes it
+            self.explore_pt = None
+            return p
+        # explore for loot
+        if self.explore_pt is None or t > self.explore_until or d2(self.explore_pt, pos) < 15                 or not self.in_circle(self.explore_pt, sc, sr, 10):
+            self.explore_pt = None
+            for _ in range(25):
+                a = self.rng.uniform(0, TAU)
+                r = math.sqrt(self.rng.random()) * sr * 0.85
+                x, y = sc[0] + math.cos(a) * r, sc[1] + math.sin(a) * r
+                dd = math.hypot(x - pos[0], y - pos[1])
+                if 60 < dd < 260 and w.walkable(x, y):
+                    self.explore_pt = (x, y)
+                    self.explore_until = t + 30
+                    break
+        return self.explore_pt
 
     def _want_cover(self, visible_enemies, hp_frac, target, t):
         shooters = [m for m, dist, los in visible_enemies if los and dist < 150]
@@ -289,6 +333,20 @@ class Bot:
                 mechs.append(m)
             else:
                 npcs.append(m)
+        # remember drones and crates for farming
+        for n in npcs:
+            self.npc_mem[n["id"]] = (n["pos"], n.get("hp", 350), t)
+        for c in obs["crates"]:
+            self.crate_mem[c["id"]] = (c["pos"], c.get("hp", 300), t)
+        if obs["tick"] % 4 == 0:
+            seen_n = {n["id"] for n in npcs}
+            seen_c = {c["id"] for c in obs["crates"]}
+            for mem, seen, life in ((self.npc_mem, seen_n, 90), (self.crate_mem, seen_c, 1e9)):
+                for k, (p_, hp_, ts_) in list(mem.items()):
+                    if k in seen:
+                        continue
+                    if t - ts_ > life or (d2(p_, pos) < 32 and self.world.los(eye, (p_[0], p_[1], p_[2] + 1.5), step=2.0)):
+                        del mem[k]
         took_damage = False
         for e in obs["events"]:
             et = e.get("type")
@@ -560,7 +618,12 @@ class Bot:
                 pref_d = 55
             if "lightning" in tw and "lightning" not in has:
                 pref_d = max(pref_d, 60)
-            if hp_frac < 0.3 and m.get("hp", 1400) / 1400 > hp_frac + 0.15:
+            rush = False
+            if "laser" in tw and dist > 40 and hp_frac > 0.3:
+                # a laser wins at range and loses up close (lightning shorts it, 1.65 s cooldown)
+                pref_d = 25
+                rush = True
+            elif hp_frac < 0.3 and m.get("hp", 1400) / 1400 > hp_frac + 0.15:
                 pref_d = 150  # back off
             bx, by = m["pos"][0] - pos[0], m["pos"][1] - pos[1]
             bn = math.hypot(bx, by) or 1
@@ -613,7 +676,7 @@ class Bot:
                     if not self.world.walk_line(pos, ahead):
                         mx, my = bx * radial if radial else bx, by * radial if radial else by
                 move = (mx, my)
-                boost = laser_threat is not None and me["energy"] > (70 if "lightning" in has else 35)
+                boost = (laser_threat is not None or (rush and radial > 0)) and me["energy"] > (55 if "lightning" in has else 30)
         else:
             # calm: loot, cubes, drops, then hold a safe spot
             if best_pick and best_pick[2] < 140:
@@ -634,6 +697,8 @@ class Bot:
                             if dr["lands_in"] < dd / 11.0 + 3:
                                 goal = dr["pos"]
                                 break
+                    if goal is None and t < 210 and hp_frac > 0.45:
+                        goal = self.farm_goal(pos, muzzle, safe_c, safe_r, t)
                     if goal is None and shoot_target and shoot_target[3] in ("crate", "npc"):
                         tp = shoot_target[0]
                         if shoot_target[5] > 40:
