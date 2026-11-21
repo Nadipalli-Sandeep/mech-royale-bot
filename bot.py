@@ -656,11 +656,11 @@ class Bot:
             if "lightning" in has:
                 pref_d = 28 if hp_frac > 0.35 else 60
             elif "laser" in has:
-                pref_d = 85
+                pref_d = 110  # sim: our hit/their hit ratio peaks at 100-125 m
             else:
-                pref_d = 75
+                pref_d = 100
             if "lightning" in tw and "lightning" not in has:
-                pref_d = max(pref_d, 60)
+                pref_d = max(pref_d, 90)
             rush = False
             if HIDE:
                 pref_d = 250
@@ -674,9 +674,10 @@ class Bot:
             bn = math.hypot(bx, by) or 1
             bx, by = bx / bn, by / bn
             radial = 0.0
-            if dist > pref_d + 10:
+            band_ = 10 if (rush or pref_d < 60) else 20
+            if dist > pref_d + band_:
                 radial = 1.0
-            elif dist < pref_d - 10:
+            elif dist < pref_d - band_:
                 radial = -1.0
             group = sum(1 for _m, _d, _l in visible_enemies if _d < 160)
             if not los:
