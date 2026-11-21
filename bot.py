@@ -32,7 +32,7 @@ def d3(a, b):
 HIDE = os.environ.get("MF_HIDE") == "1"
 DUCK = False  # ducking while reloading tested worse (3.71); kept off
 
-WEAPON_PREF = {"laser": 3, "lightning": 2, "mortar": -1, "gun": 0}
+WEAPON_PREF = {"lightning": 3, "laser": 2, "mortar": -1, "gun": 0}
 UPGRADE_ORDER = ["armor", "plating", "gun_damage", "gun_rate", "nanites", "laser_charge", "laser_damage",
                  "lightning_efficiency", "reactor", "capacitor", "lightning_chain", "lightning_range", "gun_mag",
                  "servos", "sensors", "gyros", "jets", "gun_velocity", "laser_pierce", "mortar_reload",
