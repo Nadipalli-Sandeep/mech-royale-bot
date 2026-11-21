@@ -29,7 +29,7 @@ def d3(a, b):
 
 
 # Diagnostic switch: never shoot, only hide and evade (used to measure what pure survival scores).
-HIDE = os.environ.get("MF_HIDE") == "1"
+HIDE = True
 
 WEAPON_PREF = {"lightning": 3, "laser": 2, "mortar": -1, "gun": 0}
 UPGRADE_ORDER = ["armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "reactor", "nanites",
