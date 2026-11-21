@@ -1,5 +1,6 @@
 """Mech Royale bot: survive, loot, and win 1-on-1 fights with good aim, cover and dodging."""
 import math
+import os
 import random
 import sys
 import time
@@ -129,6 +130,9 @@ class Bot:
         self.jump_cd = 0
         self.prev_hp = None
         self.cover_cache = None
+        # Test-only: extra action delay of the remote play server (unset in scored matches = lockstep).
+        self.lat = float(os.environ.get("MF_LAT", "0") or 0)
+        self.prev_cmd = None
 
     # ------------------------------------------------------------------ helpers
     def zone_at(self, z, t):
@@ -350,6 +354,7 @@ class Bot:
 
         # ---------------- aim & fire
         aim = None
+        self.gate = None
         fire = [False, False]
         reload = False
         shoot_target = None  # (pos, vel, height, kind)
@@ -379,7 +384,7 @@ class Bot:
             tp, tv, th, tkind, tlos, tdist = shoot_target
             center = [tp[0], tp[1], tp[2] + th * 0.5]
             mv_ = me.get("vel") or [0, 0, 0]
-            L = 0.12  # decision latency: the torso gets there about one decision later
+            L = 0.12 + self.lat  # decision latency: the torso gets there about one decision later
             mz = [muzzle[0] + mv_[0] * L, muzzle[1] + mv_[1] * L, muzzle[2]]
 
             def lead(src, extra):
@@ -402,9 +407,10 @@ class Bot:
             y0, pt0 = yp(muzzle, p0)
             ay, ap = me["aim"]
             hd = max(1.0, d2(p0, muzzle))
-            tol_y = math.atan2(2.0 if tkind == "mech" else 1.2, hd)
+            tol_y = math.atan2(2.3 if tkind == "mech" else 1.2, hd)
             tol_p = math.atan2(th * 0.42, hd)
-            on = abs(wrap(ay - y0)) < tol_y + 0.008 and abs(ap - pt0) < tol_p + 0.01
+            on = abs(wrap(ay - y0)) < tol_y + 0.012 and abs(ap - pt0) < tol_p + 0.012
+            self.gate = (math.degrees(wrap(ay - y0)), math.degrees(ap - pt0), math.degrees(tol_y), math.degrees(tol_p), tdist, tlos)
             # hitscan / instant (laser, lightning): current and soon-after bearing to the center
             yc0, pc0 = yp(muzzle, center)
             cL = [center[0] + tv[0] * 0.08, center[1] + tv[1] * 0.08, center[2] + tv[2] * 0.08]
@@ -413,6 +419,11 @@ class Bot:
             ey_inst = min(abs(wrap(ay - yc0)), abs(wrap(ay - ycL)))
             on_now = ey_inst < tol_y + 0.004 and min(abs(ap - pc0), abs(ap - pcL)) < tol_p + 0.01
             ey = ey_inst
+            if self.lat > 0:
+                # delayed server: our fire lands when the torso has reached this command
+                steady = self.prev_cmd is not None and abs(wrap(self.prev_cmd[0] - yaw)) < 0.12
+                on = on_now = steady
+                ey = 0.0 if steady else 1.0
             for i, w in enumerate(weapons):
                 if not w:
                     continue
@@ -560,8 +571,14 @@ class Bot:
             elif dist < pref_d - 10:
                 radial = -1.0
             if not los:
-                # go find a line: move toward the target via path
-                goal = m["pos"]
+                ehp = m.get("hp", 1400) / max(1.0, m.get("max_hp", 1400))
+                if hp_frac > 0.5 or ehp < hp_frac - 0.1:
+                    # go find a line: move toward the target via path
+                    goal = m["pos"]
+                else:
+                    # hurt: let it come to us and regenerate behind cover
+                    goal = None
+                    walk_slow = True
                 radial = None
             if t > self.strafe_until:
                 self.strafe_sign = self.rng.choice((-1, 1))
@@ -701,6 +718,7 @@ class Bot:
         act["boost"] = bool(boost)
         act["jump"] = bool(jump)
         act["aim"] = [round(aim[0], 4), round(max(-0.69, min(1.29, aim[1])), 4)]
+        self.prev_cmd = act["aim"]
         act["fire"] = fire
         if reload:
             act["reload"] = True
