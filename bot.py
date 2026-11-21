@@ -694,7 +694,7 @@ class Bot:
                 radial = None
             if t > self.strafe_until:
                 self.strafe_sign = self.rng.choice((-1, 1))
-                self.strafe_until = t + self.rng.uniform(0.3, 0.7)
+                self.strafe_until = t + self.rng.uniform(0.25, 0.55)
             if radial is not None:
                 if group >= 2:
                     # outnumbered in the open: back away from the group while fighting the nearest
@@ -727,7 +727,7 @@ class Bot:
                     boost = me["energy"] > (55 if "lightning" in has else 30)
                 else:
                     # boosted jinking makes leading gunners miss (sim: 45% -> 38% hit at 60 m)
-                    boost = (not charging) and dist > 40 and me["energy"] > (70 if "lightning" in has else 45)
+                    boost = (not charging) and dist > 40 and me["energy"] > (55 if "lightning" in has else 25)
         else:
             # calm: supply drops (3 cubes + full HP/energy), loot, cubes, then hold a safe spot
             drop_goal = None
