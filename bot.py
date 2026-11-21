@@ -30,10 +30,11 @@ def d3(a, b):
 
 # Diagnostic switch: never shoot, only hide and evade (used to measure what pure survival scores).
 HIDE = os.environ.get("MF_HIDE") == "1"
+DUCK = False  # ducking while reloading tested worse (3.71); kept off
 
 WEAPON_PREF = {"laser": 3, "lightning": 2, "mortar": -1, "gun": 0}
-UPGRADE_ORDER = ["armor", "plating", "nanites", "laser_charge", "laser_damage", "lightning_efficiency", "gun_rate",
-                 "gun_damage", "reactor", "capacitor", "lightning_chain", "lightning_range", "gun_mag",
+UPGRADE_ORDER = ["armor", "plating", "gun_damage", "gun_rate", "nanites", "laser_charge", "laser_damage",
+                 "lightning_efficiency", "reactor", "capacitor", "lightning_chain", "lightning_range", "gun_mag",
                  "servos", "sensors", "gyros", "jets", "gun_velocity", "laser_pierce", "mortar_reload",
                  "mortar_velocity", "mortar_splash"]
 
@@ -247,7 +248,7 @@ class Bot:
         return self.explore_pt
 
     def _want_duck(self, target, weapons, has, me):
-        if HIDE or target is None or not target[2] or target[1] > 170:
+        if not DUCK or HIDE or target is None or not target[2] or target[1] > 170:
             return False
         w0 = weapons[0]
         if not w0 or w0["kind"] != "gun":
@@ -723,8 +724,19 @@ class Bot:
                 move = (mx, my)
                 boost = (laser_threat is not None or (rush and radial > 0)) and me["energy"] > (55 if "lightning" in has else 30)
         else:
-            # calm: loot, cubes, drops, then hold a safe spot
-            if best_pick and best_pick[2] < 140:
+            # calm: supply drops (3 cubes + full HP/energy), loot, cubes, then hold a safe spot
+            drop_goal = None
+            if not HIDE:
+                hot = any(los and dist < 120 for _m, dist, los in visible_enemies)
+                for dr in obs.get("drops", []):
+                    dd = d2(dr["pos"], pos)
+                    holder = dr.get("holder")
+                    if dd < 320 and not hot and (holder is None or holder == me["id"])                             and self.in_circle(dr["pos"], safe_c, safe_r, 0) and dr["lands_in"] < dd / 11.0 + 6:
+                        drop_goal = dr["pos"]
+                        break
+            if drop_goal is not None:
+                goal = drop_goal
+            elif best_pick and best_pick[2] < 140:
                 goal = best_pick[1]["pos"]
             else:
                 cb = None
