@@ -31,9 +31,9 @@ def d3(a, b):
 # Diagnostic switch: never shoot, only hide and evade (used to measure what pure survival scores).
 HIDE = os.environ.get("MF_HIDE") == "1"
 
-WEAPON_PREF = {"lightning": 3, "laser": 2, "mortar": -1, "gun": 0}
-UPGRADE_ORDER = ["armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "reactor", "nanites",
-                 "capacitor", "lightning_chain", "lightning_range", "laser_charge", "laser_damage", "gun_mag",
+WEAPON_PREF = {"laser": 3, "lightning": 2, "mortar": -1, "gun": 0}
+UPGRADE_ORDER = ["armor", "plating", "laser_charge", "laser_damage", "lightning_efficiency", "gun_rate", "gun_damage",
+                 "nanites", "reactor", "capacitor", "lightning_chain", "lightning_range", "gun_mag",
                  "servos", "sensors", "gyros", "jets", "gun_velocity", "laser_pierce", "mortar_reload",
                  "mortar_velocity", "mortar_splash"]
 
@@ -621,6 +621,8 @@ class Bot:
             # preferred distance
             if "lightning" in has:
                 pref_d = 28 if hp_frac > 0.35 else 60
+            elif "laser" in has:
+                pref_d = 75
             else:
                 pref_d = 55
             if "lightning" in tw and "lightning" not in has:
@@ -628,7 +630,7 @@ class Bot:
             rush = False
             if HIDE:
                 pref_d = 250
-            elif "laser" in tw and dist > 40 and hp_frac > 0.3:
+            elif "laser" in tw and "lightning" in has and dist > 40 and hp_frac > 0.3:
                 # a laser wins at range and loses up close (lightning shorts it, 1.65 s cooldown)
                 pref_d = 25
                 rush = True
@@ -669,7 +671,8 @@ class Bot:
                     bx, by = gx / gn, gy / gn
                     radial = -1.0
                 sx, sy = -by * self.strafe_sign, bx * self.strafe_sign
-                mx, my = sx * 0.85 + bx * radial * 0.7, sy * 0.85 + by * radial * 0.7
+                sw, rw = (0.35, 1.0) if rush and radial > 0 else (0.85, 0.7)
+                mx, my = sx * sw + bx * radial * rw, sy * sw + by * radial * rw
                 # keep inside zone
                 if not self.in_circle((pos[0] + mx * 10, pos[1] + my * 10), cur_c, cur_r, 3):
                     cx, cy = cur_c[0] - pos[0], cur_c[1] - pos[1]
