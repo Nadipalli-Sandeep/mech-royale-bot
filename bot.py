@@ -656,9 +656,9 @@ class Bot:
             if "lightning" in has:
                 pref_d = 28 if hp_frac > 0.35 else 60
             elif "laser" in has:
-                pref_d = 75
+                pref_d = 85
             else:
-                pref_d = 55
+                pref_d = 75
             if "lightning" in tw and "lightning" not in has:
                 pref_d = max(pref_d, 60)
             rush = False
@@ -694,7 +694,7 @@ class Bot:
                 radial = None
             if t > self.strafe_until:
                 self.strafe_sign = self.rng.choice((-1, 1))
-                self.strafe_until = t + self.rng.uniform(0.5, 1.4)
+                self.strafe_until = t + self.rng.uniform(0.3, 0.7)
             if radial is not None:
                 if group >= 2:
                     # outnumbered in the open: back away from the group while fighting the nearest
@@ -722,7 +722,12 @@ class Bot:
                     if not self.world.walk_line(pos, ahead):
                         mx, my = bx * radial if radial else bx, by * radial if radial else by
                 move = (mx, my)
-                boost = (laser_threat is not None or (rush and radial > 0)) and me["energy"] > (55 if "lightning" in has else 30)
+                charging = any(w and w["kind"] == "laser" and (w.get("charge") or 0) > 0 for w in weapons)
+                if (laser_threat is not None or (rush and radial > 0)):
+                    boost = me["energy"] > (55 if "lightning" in has else 30)
+                else:
+                    # boosted jinking makes leading gunners miss (sim: 45% -> 38% hit at 60 m)
+                    boost = (not charging) and dist > 40 and me["energy"] > (70 if "lightning" in has else 45)
         else:
             # calm: supply drops (3 cubes + full HP/energy), loot, cubes, then hold a safe spot
             drop_goal = None
