@@ -28,6 +28,9 @@ def d3(a, b):
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
 
 
+# Diagnostic switch: never shoot, only hide and evade (used to measure what pure survival scores).
+HIDE = os.environ.get("MF_HIDE") == "1"
+
 WEAPON_PREF = {"lightning": 3, "laser": 2, "mortar": -1, "gun": 0}
 UPGRADE_ORDER = ["armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "reactor", "nanites",
                  "capacitor", "lightning_chain", "lightning_range", "laser_charge", "laser_damage", "gun_mag",
@@ -243,6 +246,8 @@ class Bot:
         return self.explore_pt
 
     def _want_cover(self, visible_enemies, hp_frac, target, t):
+        if HIDE:
+            return True
         shooters = [m for m, dist, los in visible_enemies if los and dist < 150]
         if len(shooters) >= 2:
             return True
@@ -514,6 +519,8 @@ class Bot:
                         fire[i] = True
                 elif k == "mortar":
                     pass
+        if HIDE:
+            fire = [False, False]
         # reload when no enemy is close and in sight
         if w0 and w0["kind"] == "gun" and not fire[0] and w0.get("ammo", 12) < w0.get("stats", {}).get("mag", 12) and w0.get("reload", 0) == 0:
             close = any(los and dist < 150 for _, dist, los in visible_enemies)
@@ -619,7 +626,9 @@ class Bot:
             if "lightning" in tw and "lightning" not in has:
                 pref_d = max(pref_d, 60)
             rush = False
-            if "laser" in tw and dist > 40 and hp_frac > 0.3:
+            if HIDE:
+                pref_d = 250
+            elif "laser" in tw and dist > 40 and hp_frac > 0.3:
                 # a laser wins at range and loses up close (lightning shorts it, 1.65 s cooldown)
                 pref_d = 25
                 rush = True
@@ -697,9 +706,9 @@ class Bot:
                             if dr["lands_in"] < dd / 11.0 + 3:
                                 goal = dr["pos"]
                                 break
-                    if goal is None and t < 210 and hp_frac > 0.45:
+                    if goal is None and t < 210 and hp_frac > 0.45 and not HIDE:
                         goal = self.farm_goal(pos, muzzle, safe_c, safe_r, t)
-                    if goal is None and shoot_target and shoot_target[3] in ("crate", "npc"):
+                    if goal is None and shoot_target and shoot_target[3] in ("crate", "npc") and not HIDE:
                         tp = shoot_target[0]
                         if shoot_target[5] > 40:
                             goal = tp
