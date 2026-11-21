@@ -128,6 +128,7 @@ class Bot:
         self.blocked_pickups = {}
         self.jump_cd = 0
         self.prev_hp = None
+        self.cover_cache = None
 
     # ------------------------------------------------------------------ helpers
     def zone_at(self, z, t):
@@ -156,6 +157,54 @@ class Bot:
 
     def in_circle(self, p, c, r, margin=0.0):
         return d2(p, c) <= r - margin
+
+    def find_cover(self, pos, threats, circ, t):
+        """A nearby walkable point hidden from the given threat positions. Cached for 0.5 s."""
+        if self.cover_cache and t - self.cover_cache[0] < 0.5:
+            return self.cover_cache[1]
+        w = self.world
+        best = None
+        base = self.rng.uniform(0, TAU)
+        threats = sorted(threats, key=lambda p: d2(p, pos))[:3]
+        deadline = time.perf_counter() + 0.006
+        for r in (10.0, 18.0, 28.0, 40.0):
+            if time.perf_counter() > deadline:
+                break
+            for k in range(10):
+                a = base + k * TAU / 10
+                x, y = pos[0] + math.cos(a) * r, pos[1] + math.sin(a) * r
+                if not w.walkable(x, y):
+                    continue
+                if circ and not self.in_circle((x, y), circ[0], circ[1], 4):
+                    continue
+                z = w.surface(x, y)
+                if z is None:
+                    continue
+                seen = 0
+                for tp in threats:
+                    e = (tp[0], tp[1], tp[2] + 8.0)
+                    if w.los(e, (x, y, z + 7.5), step=2.0) or w.los(e, (x, y, z + 3.0), step=2.0):
+                        seen += 1
+                sc = seen * 100 + r + (0 if w.walk_line(pos, (x, y)) else 25)
+                if best is None or sc < best[0]:
+                    best = (sc, (x, y), seen)
+            if best and best[2] == 0 and best[0] < r + 1:
+                break
+        res = best[1] if best and best[2] < len(threats) else None
+        self.cover_cache = (t, res)
+        return res
+
+    def _want_cover(self, visible_enemies, hp_frac, target, t):
+        shooters = [m for m, dist, los in visible_enemies if los and dist < 150]
+        if len(shooters) >= 2:
+            return True
+        if target is None:
+            return False
+        m = target[0]
+        ehp = m.get("hp", 1400) / max(1.0, m.get("max_hp", 1400))
+        if hp_frac < 0.3 and ehp > hp_frac + 0.2:
+            return True
+        return False
 
     # ------------------------------------------------------------------ navigation
     def nav_to(self, goal, t, pos, urgent=False):
@@ -205,7 +254,7 @@ class Bot:
         self.t_start = time.perf_counter()
         a = self.act2(obs)
         # spend leftover time on path planning (keep total well under the 50 ms budget)
-        left = 0.012 - (time.perf_counter() - self.t_start)
+        left = 0.010 - (time.perf_counter() - self.t_start)
         if left > 0.002:
             self.planner.work(left)
         return a
@@ -329,41 +378,57 @@ class Bot:
         if shoot_target:
             tp, tv, th, tkind, tlos, tdist = shoot_target
             center = [tp[0], tp[1], tp[2] + th * 0.5]
-            # lead for the gun
-            p = center
-            tt = 0.0
-            for _ in range(3):
-                tt = d3(p, muzzle) / self.gun_speed + 0.05
-                p = [center[0] + tv[0] * tt, center[1] + tv[1] * tt, center[2] + tv[2] * tt]
-            gz = self.world.ground(p[0], p[1])
-            if p[2] < gz + th * 0.3:
-                p[2] = gz + th * 0.3
-            hd = d2(p, muzzle)
-            yaw = math.atan2(p[1] - muzzle[1], p[0] - muzzle[0])
-            pitch = math.atan2(p[2] - muzzle[2], hd)
+            mv_ = me.get("vel") or [0, 0, 0]
+            L = 0.12  # decision latency: the torso gets there about one decision later
+            mz = [muzzle[0] + mv_[0] * L, muzzle[1] + mv_[1] * L, muzzle[2]]
+
+            def lead(src, extra):
+                p = center
+                for _ in range(3):
+                    tt = d3(p, src) / self.gun_speed + extra
+                    p = [center[0] + tv[0] * tt, center[1] + tv[1] * tt, center[2] + tv[2] * tt]
+                gz = self.world.ground(p[0], p[1])
+                if p[2] < gz + th * 0.3:
+                    p[2] = gz + th * 0.3
+                return p
+
+            def yp(src, p):
+                return (math.atan2(p[1] - src[1], p[0] - src[0]), math.atan2(p[2] - src[2], max(0.5, d2(p, src))))
+
+            pL = lead(mz, L)          # where to command the torso
+            p0 = lead(muzzle, 0.0)    # where a bullet fired right now should go
+            yaw, pitch = yp(mz, pL)
             aim = [yaw, pitch]
-            # actual aim error
+            y0, pt0 = yp(muzzle, p0)
             ay, ap = me["aim"]
-            ey = abs(wrap(ay - yaw))
-            ep = abs(ap - pitch)
-            tol_y = math.atan2(1.9 if tkind == "mech" else 1.2, max(hd, 1))
-            tol_p = math.atan2(th * 0.4, max(hd, 1))
-            on = ey < tol_y + 0.01 and ep < tol_p + 0.01
-            # direct (no-lead) aim for hitscan
-            yaw_now = math.atan2(center[1] - muzzle[1], center[0] - muzzle[0])
-            pitch_now = math.atan2(center[2] - muzzle[2], d2(center, muzzle))
-            on_now = abs(wrap(ay - yaw_now)) < tol_y + 0.005 and abs(ap - pitch_now) < tol_p + 0.01
+            hd = max(1.0, d2(p0, muzzle))
+            tol_y = math.atan2(2.0 if tkind == "mech" else 1.2, hd)
+            tol_p = math.atan2(th * 0.42, hd)
+            on = abs(wrap(ay - y0)) < tol_y + 0.008 and abs(ap - pt0) < tol_p + 0.01
+            # hitscan / instant (laser, lightning): current and soon-after bearing to the center
+            yc0, pc0 = yp(muzzle, center)
+            cL = [center[0] + tv[0] * 0.08, center[1] + tv[1] * 0.08, center[2] + tv[2] * 0.08]
+            mz2 = [muzzle[0] + mv_[0] * 0.08, muzzle[1] + mv_[1] * 0.08, muzzle[2]]
+            ycL, pcL = yp(mz2, cL)
+            ey_inst = min(abs(wrap(ay - yc0)), abs(wrap(ay - ycL)))
+            on_now = ey_inst < tol_y + 0.004 and min(abs(ap - pc0), abs(ap - pcL)) < tol_p + 0.01
+            ey = ey_inst
             for i, w in enumerate(weapons):
                 if not w:
                     continue
                 k = w["kind"]
                 st = w.get("stats", {})
                 if k == "gun":
-                    if tlos and tdist < st.get("range", 230) * 0.98 and on and w.get("reload", 0) == 0 and w.get("ammo", 1) > 0:
+                    ammo = w.get("ammo", 1)
+                    if tkind == "crate" and ammo <= 4:
+                        continue
+                    if tlos and tdist < st.get("range", 230) * 0.98 and on and w.get("reload", 0) == 0 and ammo > 0:
                         fire[i] = True
                 elif k == "lightning":
                     rng = st.get("range", 45)
-                    if tlos and tdist < rng * 0.95 and ey < math.radians(st.get("cone_deg", 30)) * 0.4 and me["energy"] > st.get("energy", 3) + 6:
+                    half = math.radians(st.get("cone_deg", 30)) * 0.5
+                    en_need = st.get("energy", 3) + (2 if tkind == "mech" else 30)
+                    if tlos and tdist < rng * 0.96 and ey < half * 0.85 and me["energy"] > en_need:
                         fire[i] = True
                 elif k == "laser":
                     charge = w.get("charge", 0) or 0
@@ -380,10 +445,12 @@ class Bot:
                         fire[i] = True
                 elif k == "mortar":
                     pass
-        # reload when idle
-        if w0 and w0["kind"] == "gun" and not fire[0] and w0.get("ammo", 12) < w0.get("stats", {}).get("mag", 12) * 0.5 and w0.get("reload", 0) == 0:
-            if not (target and target[2] and target[1] < 120):
-                reload = True
+        # reload when no enemy is close and in sight
+        if w0 and w0["kind"] == "gun" and not fire[0] and w0.get("ammo", 12) < w0.get("stats", {}).get("mag", 12) and w0.get("reload", 0) == 0:
+            close = any(los and dist < 150 for _, dist, los in visible_enemies)
+            if not close and (shoot_target is None or shoot_target[3] != "mech" or w0.get("ammo", 12) <= 3):
+                if not (shoot_target and shoot_target[3] == "npc" and w0.get("ammo", 12) > 3):
+                    reload = True
         if w0 and w0["kind"] == "gun" and w0.get("ammo", 1) == 0 and w0.get("reload", 0) == 0:
             reload = True
 
@@ -453,10 +520,26 @@ class Bot:
                 if abs(wrap(m["aim"][0] - byaw)) < math.atan2(6, max(dist, 1)) + 0.08:
                     laser_threat = (m, byaw)
 
+        self.mode = "calm"
         if not me["in_zone"]:
             goal = cur_c
             boost = me["energy"] > 10
+            self.mode = "zone"
+        elif engaged and self._want_cover(visible_enemies, hp_frac, target, t):
+            threats = [m["pos"] for m, dist, los in visible_enemies if dist < 160]
+            cp = self.find_cover(pos, threats, (cur_c, cur_r), t)
+            if cp is not None:
+                goal = cp
+                boost = me["energy"] > 30
+                self.mode = "cover"
+            else:
+                goal = None
+        if goal is not None and self.mode == "cover":
+            pass
+        elif not me["in_zone"]:
+            pass
         elif engaged:
+            self.mode = "fight"
             m, dist, los = target
             tw = m.get("weapons") or []
             # preferred distance
@@ -501,7 +584,7 @@ class Bot:
                     if not self.world.walk_line(pos, ahead):
                         mx, my = bx * radial if radial else bx, by * radial if radial else by
                 move = (mx, my)
-                boost = me["energy"] > 50 and (recently_hit or laser_threat is not None)
+                boost = me["energy"] > (75 if "lightning" in has else 40) and (recently_hit or laser_threat is not None)
         else:
             # calm: loot, cubes, drops, then hold a safe spot
             if best_pick and best_pick[2] < 140:
